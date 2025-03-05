@@ -94,35 +94,36 @@ def monitor_coins():
                 # Проверка изменения количества холдеров
                 diff = current_holders - info["holders"]
                 current_time = time.time()
+                elapsed_time = current_time - info["last_check"]
                 
-                if diff >= 10 and diff <= 20:
-                    updater.bot.send_message(
-                        chat_id=TARGET_USER_ID,
-                        text=f"Монета {token_address}: количество холдеров увеличилось на {diff} (всего: {current_holders})"
-                    )
-                    logging.info(f"Монета {token_address}: количество холдеров увеличилось на {diff} (всего: {current_holders})")
-                    info["holders"] = current_holders
-                    info["stagnation_time"] = 0
-                    info["last_check"] = current_time
-                
-                elif diff > 20:
-                    info["holders"] = current_holders
-                    info["stagnation_time"] = 0
-                    info["last_check"] = current_time
-                
-                else:
-                    # Проверка стагнации
-                    elapsed_time = current_time - info["last_check"]
-                    info["stagnation_time"] += elapsed_time
-                    
-                    if info["stagnation_time"] >= 60:  # Увеличено до 60 секунд
-                        coins_to_remove.append(token_address)
+                # Проверяем каждые 10-20 секунд
+                if elapsed_time >= 10:  # Проверяем каждые 10 секунд
+                    if diff >= 10 and diff <= 20:
                         updater.bot.send_message(
                             chat_id=TARGET_USER_ID,
-                            text=f"Монета {token_address} исключена из мониторинга: нет роста более 10 холдеров за 60 секунд"
+                            text=f"Монета {token_address}: количество холдеров увеличилось на {diff} (всего: {current_holders}) за {int(elapsed_time)} секунд"
                         )
-                        logging.info(f"Монета {token_address} исключена из мониторинга")
-                    info["last_check"] = current_time
+                        logging.info(f"Монета {token_address}: количество холдеров увеличилось на {diff} (всего: {current_holders})")
+                        info["holders"] = current_holders
+                        info["stagnation_time"] = 0
+                        info["last_check"] = current_time
+                    
+                    elif diff > 20:
+                        info["holders"] = current_holders
+                        info["stagnation_time"] = 0
+                        info["last_check"] = current_time
+                    
+                    else:
+                        # Проверка стагнации
+                        info["stagnation_time"] += elapsed_time
+                        if info["stagnation_time"] >= 20:  # Исключаем, если нет роста за 20 секунд
+                            coins_to_remove.append(token_address)
+                            updater.bot.send_message(
+                                chat_id=TARGET_USER_ID,
+                                text=f"Монета {token_address} исключена из мониторинга: нет роста более 10 холдеров за 20 секунд"
+                            )
+                            logging.info(f"Монета {token_address} исключена из мониторинга")
+                        info["last_check"] = current_time
 
         # Удаление монет после итерации
         for coin in coins_to_remove:
@@ -138,10 +139,21 @@ def start(update, context):
     monitor_thread = Thread(target=monitor_coins)
     monitor_thread.start()
 
+# Команда для проверки статуса
+def status(update, context):
+    if not monitored_coins:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Нет токенов в мониторинге.")
+    else:
+        message = "Текущие токены в мониторинге:\n"
+        for token_address, info in monitored_coins.items():
+            message += f"{token_address}: {info['holders']} холдеров\n"
+        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
+
 # Настройка Telegram бота
 updater = Updater(TELEGRAM_TOKEN, use_context=True)
 dp = updater.dispatcher
 dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CommandHandler("status", status))
 
 # Запуск Flask
 if __name__ == "__main__":
