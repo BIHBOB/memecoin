@@ -1,9 +1,14 @@
 import time
 import requests
+import os
 from telegram.ext import Updater, CommandHandler
 from threading import Thread
 from flask import Flask, request
 import json
+import logging
+
+# Логирование
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Конфигурация
 API_KEY = "2364999c-427e-4cff-b4af-7cec2511069b"
@@ -12,19 +17,25 @@ TARGET_USER_ID = "5998116373"
 BASE_URL = "https://mainnet.helius-rpc.com/?api-key="
 
 # Динамический список монет
-monitored_coins = {}
+monitored_coins = {
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {"holders": 0, "last_check": 0, "stagnation_time": 0},  # USDC для теста
+}
 
-# Flask для Webhook
+# Flask для Webhook (Helius и Telegram)
 app = Flask(__name__)
 
-# Запуск Flask в отдельном потоке
-def run_flask():
-    app.run(host='0.0.0.0', port=5000)
+# Обработка Telegram Webhook
+@app.route('/telegram', methods=['POST'])
+def telegram_webhook():
+    update = request.get_json()
+    updater.bot.process_update(update)
+    return '', 200
 
-# Обработка Webhook для новых токенов
+# Обработка Helius Webhook
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
+    logging.info(f"Получены данные от Helius: {json.dumps(data, indent=2)}")
     if isinstance(data, list) and len(data) > 0:
         transaction = data[0]
         if 'meta' in transaction and 'postTokenBalances' in transaction['meta']:
@@ -32,7 +43,11 @@ def webhook():
                 token_address = balance.get('mint')
                 if token_address and token_address not in monitored_coins:
                     monitored_coins[token_address] = {"holders": 0, "last_check": 0, "stagnation_time": 0}
-                    print(f"Добавлен новый токен: {token_address}")
+                    logging.info(f"Добавлен новый токен: {token_address}")
+                    updater.bot.send_message(
+                        chat_id=TARGET_USER_ID,
+                        text=f"Добавлен новый токен: {token_address}"
+                    )
     return '', 200
 
 # Функция для получения количества холдеров
@@ -48,13 +63,14 @@ def get_holders_count(token_address):
         data = response.json()
         if "result" in data and "token_accounts" in data["result"]:
             return len(data["result"]["token_accounts"])
+        logging.warning(f"Нет данных о холдерах для {token_address}: {data}")
         return 0
     except Exception as e:
-        print(f"Ошибка при запросе к API: {e}")
+        logging.error(f"Ошибка при запросе к API для {token_address}: {e}")
         return None
 
 # Функция мониторинга
-def monitor_coins(update_context):
+def monitor_coins():
     while True:
         coins_to_remove = []
         for token_address, info in monitored_coins.items():
@@ -67,10 +83,11 @@ def monitor_coins(update_context):
                 if info["holders"] == 0:
                     info["holders"] = current_holders
                     info["last_check"] = time.time()
-                    update_context.bot.send_message(
+                    updater.bot.send_message(
                         chat_id=TARGET_USER_ID,
                         text=f"Начало мониторинга токена {token_address} с {current_holders} холдерами"
                     )
+                    logging.info(f"Начало мониторинга токена {token_address} с {current_holders} холдерами")
                     continue
 
                 # Проверка изменения количества холдеров
@@ -78,10 +95,11 @@ def monitor_coins(update_context):
                 current_time = time.time()
                 
                 if diff >= 10 and diff <= 20:
-                    update_context.bot.send_message(
+                    updater.bot.send_message(
                         chat_id=TARGET_USER_ID,
                         text=f"Монета {token_address}: количество холдеров увеличилось на {diff} (всего: {current_holders})"
                     )
+                    logging.info(f"Монета {token_address}: количество холдеров увеличилось на {diff} (всего: {current_holders})")
                     info["holders"] = current_holders
                     info["stagnation_time"] = 0
                     info["last_check"] = current_time
@@ -98,10 +116,11 @@ def monitor_coins(update_context):
                     
                     if info["stagnation_time"] >= 10:
                         coins_to_remove.append(token_address)
-                        update_context.bot.send_message(
+                        updater.bot.send_message(
                             chat_id=TARGET_USER_ID,
                             text=f"Монета {token_address} исключена из мониторинга: нет роста более 10 холдеров за 10 секунд"
                         )
+                        logging.info(f"Монета {token_address} исключена из мониторинга")
                     info["last_check"] = current_time
 
         # Удаление монет после итерации
@@ -115,21 +134,26 @@ def monitor_coins(update_context):
 def start(update, context):
     context.bot.send_message(chat_id=update.effective_chat.id, text="Бот запущен! Мониторинг начался.")
     # Запуск мониторинга в отдельном потоке
-    monitor_thread = Thread(target=monitor_coins, args=(context,))
+    monitor_thread = Thread(target=monitor_coins)
     monitor_thread.start()
 
-def main():
-    # Запуск Flask в отдельном потоке
-    flask_thread = Thread(target=run_flask)
-    flask_thread.start()
+# Настройка Telegram бота
+updater = Updater(TELEGRAM_TOKEN, use_context=True)
+dp = updater.dispatcher
+dp.add_handler(CommandHandler("start", start))
 
-    # Запуск Telegram бота
-    updater = Updater(TELEGRAM_TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    
-    updater.start_polling()
-    updater.idle()
+# Запуск Flask
+if __name__ == "__main__":
+    # Настройка Telegram Webhook
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "https://your-app-name.onrender.com")  # Замените на ваш Render URL
+    telegram_webhook_url = f"{render_url}/telegram"
+    updater.bot.set_webhook(url=telegram_webhook_url)
+    logging.info(f"Telegram Webhook установлен: {telegram_webhook_url}")
 
-if __name__ == '__main__':
-    main()
+    # Запуск мониторинга
+    monitor_thread = Thread(target=monitor_coins)
+    monitor_thread.start()
+
+    # Запуск Flask
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
