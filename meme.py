@@ -18,7 +18,8 @@ BASE_URL = "https://mainnet.helius-rpc.com/?api-key="
 
 # Динамический список монет
 monitored_coins = {
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {"holders": 0, "last_check": 0, "stagnation_time": 0},  # USDC для теста
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {"holders": 0, "last_check": 0, "stagnation_time": 0},  # USDC
+    "So11111111111111111111111111111111111111112": {"holders": 0, "last_check": 0, "stagnation_time": 0},  # Wrapped SOL
 }
 
 # Flask для Webhook (Helius и Telegram)
@@ -114,11 +115,11 @@ def monitor_coins():
                     elapsed_time = current_time - info["last_check"]
                     info["stagnation_time"] += elapsed_time
                     
-                    if info["stagnation_time"] >= 10:
+                    if info["stagnation_time"] >= 60:  # Увеличено до 60 секунд
                         coins_to_remove.append(token_address)
                         updater.bot.send_message(
                             chat_id=TARGET_USER_ID,
-                            text=f"Монета {token_address} исключена из мониторинга: нет роста более 10 холдеров за 10 секунд"
+                            text=f"Монета {token_address} исключена из мониторинга: нет роста более 10 холдеров за 60 секунд"
                         )
                         logging.info(f"Монета {token_address} исключена из мониторинга")
                     info["last_check"] = current_time
